@@ -180,25 +180,25 @@ if __name__ == '__main__':
     optimizer = utils.get_optimizer(config.train.optimizer, model)
     scheduler = utils.get_scheduler(config.train.scheduler, optimizer)
 
-    # try:
-    #     # 尝试打开文件
-    #     with open(load_path + '/discriminator_test_data.pkl', 'rb') as f:
-    #         # 读取文件内容
-    #         test_data = pickle.load(f)
-    #         # 打印数据
-    #     with open(load_path + '/discriminator_test_labels.pkl', 'rb') as f:
-    #         # 读取文件内容
-    #         test_label = pickle.load(f)
-    #         # 打印数据
-    # except FileNotFoundError:
-    #     test_data, test_label = get_data(gen_dir=config.test.gen_dir,
-    #                                      true_dir=load_path + '/test_data_200.pkl', num_data=200)
-    #     with open(load_path + '/discriminator_test_data.pkl', "wb") as f:
-    #         pickle.dump(test_data, f)
-    #     with open(load_path + '/discriminator_test_labels.pkl', "wb") as f:
-    #         pickle.dump(test_label, f)
-    test_dataset = []
-    # test_dataset = GEOMLabelDataset(data=test_data, label=test_label, transform=transform)
+    try:
+        # 尝试打开文件
+        with open(load_path + '/discriminator_test_data.pkl', 'rb') as f:
+            # 读取文件内容
+            test_data = pickle.load(f)
+            # 打印数据
+        with open(load_path + '/discriminator_test_labels.pkl', 'rb') as f:
+            # 读取文件内容
+            test_label = pickle.load(f)
+            # 打印数据
+    except FileNotFoundError:
+        test_data, test_label = get_data(gen_dir=config.test.gen_dir,
+                                         true_dir=load_path + '/test_data_200.pkl', num_data=200)
+        with open(load_path + '/discriminator_test_data.pkl', "wb") as f:
+            pickle.dump(test_data, f)
+        with open(load_path + '/discriminator_test_labels.pkl', "wb") as f:
+            pickle.dump(test_label, f)
+    # test_dataset = []
+    test_dataset = GEOMLabelDataset(data=test_data, label=test_label, transform=transform)
 
     solver = runner.DefaultRunner(train_dataset, val_data, test_dataset, None, model, optimizer, scheduler, gpus,
                                 None, config)
@@ -207,7 +207,7 @@ if __name__ == '__main__':
     #     solver.load(config.train.resume_checkpoint, epoch=config.train.resume_epoch, load_optimizer=True,
     #                 load_scheduler=True)
     solver.train()
-    # disc_checkpoint = 'checkpoints/discriminator/sde/qm9_ema/checkpoint99'
+    # disc_checkpoint = 'checkpoints/discriminator/sde/qm9_dg_default2021/checkpoint99'
     # logger.log("Load discriminator checkpoint from %s" % disc_checkpoint)
     # state = torch.load(disc_checkpoint)
     #

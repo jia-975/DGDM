@@ -11,11 +11,15 @@
 #python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 729
 #python get_task1_results.py --input log/dg/qm9/ConfGF_epoch284min_sig0.000_dg_0.050_seed729.pkl --threshold 0.5
 # todo:记得更改yml文件中的checkpoints
-python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 2021
+python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 2021 --smiles c1ccccc1
 #python get_task1_results.py --input log/dg/qm9/ConfGF_epoch284min_sig0.000_dg_0.050_seed3407_reversenums800.pkl --threshold 0.5
+python -u gen_dg.py --config_path ./config/qm9_default.yml --generator ConfGF --start 0 --end 200
+python -u gen.py --config_path ./config/qm9_default.yml --generator ConfGF --test_set val_data_5k.pkl --start 0 --end 5000
+
+python -u gen.py --config_path ./config/qm9_default.yml --generator ConfGF --smiles c1ccccc1 --start -1 --end -1
 
 
-
+python -u get_task1_results.py --input  log/test/qm9_default/ConfGF_c1ccccc1.pkl --core 10 --threshold 0.5
 #python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 0.150 --seed 3407
 #python get_task1_results.py --input log/dg/drugs/ConfGF_epoch284min_sig0.000_dg_0.150_seed3407.pkl --threshold 1.25
 

@@ -24,9 +24,9 @@ from discrimintor import model, runner, utils
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='confgf')
-    parser.add_argument('--score_config_path', type=str, help='path of score config', default="config/drugs_default.yml")
+    parser.add_argument('--score_config_path', type=str, help='path of score config', default="config/qm9_default.yml")
     parser.add_argument('--discriminator_config_path', type=str, help='path of discriminator config',
-                        default="config/drugs_dg_default.yml")
+                        default="config/qm9_dg_default.yml")
     parser.add_argument('--generator', type=str, help='type of generator [ConfGF, ConfGFDist]', default="ConfGF")
     parser.add_argument('--w_dg', type=float, help='weight of discriminator', default="0.5")
     parser.add_argument('--device', type=str, default='cuda')

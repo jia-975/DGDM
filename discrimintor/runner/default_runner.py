@@ -18,10 +18,10 @@ from torch_geometric.data import DataLoader
 from torch_scatter import scatter_add
 
 from discrimintor import utils, feats
-from discrimintor.data import dataset
+# from discrimintor.data import dataset
 from discrimintor.utils import logger
 from rdkit.Chem.rdForceFieldHelpers import MMFFOptimizeMolecule
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 
 class DefaultRunner(object):
@@ -143,7 +143,7 @@ class DefaultRunner(object):
         return average_loss
 
     def train(self, verbose=1):
-        writer = SummaryWriter()
+        # writer = SummaryWriter()
         train_start = time()
 
         num_epochs = self.dg_config.train.epochs
@@ -178,13 +178,17 @@ class DefaultRunner(object):
                 if self.device.type == "cuda":
                     batch = batch.to(self.device)
                     labels = labels.to(self.device)
-
+                tmp = batch.clone()
+                data = model.extend_graph(tmp, model.order)  # 扩展图
+                data = model.get_distance(data)  # 计算距离
+                d = data.edge_length
                 # logger.log(batch, 'batch shape')
-                scores = model(data=batch, device=self.device)
+                scores = model(data=batch, d=d, device=self.device)
                 # for item in scores:
                 #     print(item.item())
+                # 处理labels
                 loss = loss_function(scores, labels)
-                writer.add_scalar("Loss/train", loss, epoch)
+                # writer.add_scalar("Loss/train", loss, epoch)
                 # loss = loss.mean()
                 if not loss.requires_grad:
                     raise RuntimeError("loss doesn't require grad")
@@ -248,7 +252,7 @@ class DefaultRunner(object):
         self.start_epoch = start_epoch + num_epochs
         logger.log('optimization finished.')
         logger.log('Total time elapsed: %.5fs' % (time() - train_start))
-        writer.close()
+        # writer.close()
         # tensorboard --logdir=runs
 
     def discriminator_sampeler(self, data, model):
@@ -452,7 +456,10 @@ class DefaultRunner(object):
             out = model(batch, self.device)
             out = torch.sigmoid(out)
             for i in range(labels.shape[0]):
-                print(out[i].item(), labels[i].item())
+                if out[i].item()!= labels[i].item():
+                    print(out[i].item(), labels[i].item())
+                else:
+                    print("--")
             loss = loss_function(out, labels)
             eval_losses.append(loss.item())
             pred_label = [1 if prob >= 0.5 else 0 for prob in out]

@@ -1,7 +1,7 @@
 train:
   batch_size: 128
   seed: 2021
-  epochs: 100
+  epochs: 10
   shuffle: true
   resume_train: false
   eval: false
@@ -36,9 +36,10 @@ train:
 
 
 test:
-  init_checkpoint: checkpoints/qm9/2021
+  init_checkpoint: checkpoints/discriminator/sde/qm9_dg_default2021
   output_path: log/dg/qm9
-  epoch: 99
+  epoch: 9
+  gen_dir: log/test/qm9_default/ConfGF_s0e200epoch284min_sig0.000.pkl
   gen:
     dg_step_size: 3.0
     dg_num_steps: 1000  

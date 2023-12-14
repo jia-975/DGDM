@@ -346,6 +346,7 @@ class DefaultRunner(object):
             with open(os.path.join(out_path, '%s_%s.pkl' % (generator, return_data.smiles)), "wb") as fout:
                 pickle.dump(return_data, fout)
             print('save generated %s samples to %s done!' % (generator, out_path))
+            print('the file is :', os.path.join(out_path, '%s_%s.pkl' % (generator, return_data.smiles)))
 
         print('pos generation of %s done' % return_data.smiles) 
 
@@ -388,9 +389,10 @@ class DefaultRunner(object):
             all_data_list.append(return_data)
 
         if out_path is not None:
-            with open(os.path.join(out_path, '%s_s%de%depoch%dmin_sig%.3f.pkl' % (generator, start, end, self.config.test.epoch, self.config.test.gen.min_sigma)), "wb") as fout:
+            with open(os.path.join(out_path, 'val_gen%s_s%de%depoch%dmin_sig%.3f.pkl' % (generator, start, end, self.config.test.epoch, self.config.test.gen.min_sigma)), "wb") as fout:
                 pickle.dump(all_data_list, fout)
             print('save generated %s samples to %s done!' % (generator, out_path))
+            print('the file is :', os.path.join(out_path, 'val_gen%s_s%de%depoch%dmin_sig%.3f.pkl' % (generator, start, end, self.config.test.epoch, self.config.test.gen.min_sigma)))
         print('pos generation[%d-%d] done  |  Time: %.5f' % (start, end, time() - generate_start))  
 
         return all_data_list
@@ -431,7 +433,7 @@ class DefaultRunner(object):
             all_data_list.append(return_data)
 
         if out_path is not None:
-            with open(os.path.join(out_path, '%ip_s_epoch%dmin_sig%.3f_dg_%.3f_seed%d.pkl' % (
+            with open(os.path.join(out_path, 'ip_%s_epoch%dmin_sig%.3f_dg_%.3f_seed%d.pkl' % (
             generator, self.config.test.epoch, self.config.test.gen.min_sigma, w_dg, seed,
                 )), "wb") as fout:
                 pickle.dump(all_data_list, fout)
@@ -489,22 +491,15 @@ class DefaultRunner(object):
             step_size = step_lr * (sigma / sigmas[-1]) ** 2
             for step in range(n_steps_each):
                 d = utils.get_d_from_pos(pos, data.edge_index).unsqueeze(-1)  # (num_edge, 1)
-                # todo input perturbation
                 noise = torch.randn_like(pos) * torch.sqrt(step_size * 2)
-                perturbation = 0.1 * torch.randn_like(noise)
-                noise += perturbation
-
 
                 score_d = scorenet.get_score(data, d, sigma)  # (num_edge, 1)
                 batch_time = torch.ones(d.shape[0], device=pos.device) * sigma
-                dg_score = dg_model.judge(data, d, batch_time)
 
-                dg_score = dg_score.unsqueeze(1)
+                dg_score = get_ratio(dg_model, data, d, batch_time)
                 score_d = score_d + w_dg * dg_score
                 score_pos = self.convert_score_d(score_d, pos, data.edge_index, d)
                 score_pos = utils.clip_norm(score_pos, limit=clip)
-
-
 
                 pos = pos + step_size * score_pos + noise  # (num_node, 3)
                 pos_vecs.append(pos)
@@ -512,3 +507,27 @@ class DefaultRunner(object):
         pos_vecs = torch.stack(pos_vecs, dim=0).view(cnt_sigma, n_steps_each, -1, 3)  # (sigams, 100, num_node, 3)
 
         return data, pos_vecs
+
+
+
+def get_ratio(dg_model, data, d, batch_time):
+    with torch.enable_grad():
+
+        x_ = d.float().clone().detach().requires_grad_(True)
+
+        dg_score = dg_model.judge(data, x_, batch_time).requires_grad_(True)
+        dg_score.requires_grad_(True)
+        dg_score = dg_score.unsqueeze(1)
+        # print(input)
+        # x_ = input.requires_grad_(True)
+        prediction = torch.clip(dg_score, 1e-5, 1. - 1e-5)
+        log_ratio = torch.log(prediction / (1. - prediction))
+        log_ratio.requires_grad_(True)
+
+        dg = torch.autograd.grad(outputs=log_ratio.sum(), inputs=x_, retain_graph=False)[0]
+
+        # dd_dr = (1. / edge_length) * (pos[edge_index[0]] - pos[edge_index[1]])  # (num_edge, 3)
+        # score_pos = scatter_add(dd_dr * score_d, edge_index[0], dim=0)
+        # c_phi =
+
+    return dg

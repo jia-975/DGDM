@@ -270,8 +270,6 @@ class SDE(torch.nn.Module):
         scores = torch.sigmoid(scores)
         # print(scores.shape)
         scores = torch.unsqueeze(scores, 1) # (num_node, 1)
-        if torch.min(scores) == 0:
 
-            print(torch.min(scores))
         scores = scores.expand(data.atom_type.shape[0], 3)
         return scores

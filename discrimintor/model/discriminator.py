@@ -166,7 +166,7 @@ class SDE(torch.nn.Module):
         data.edge_length = d
         return data
 
-    def forward(self, data, device):
+    def forward(self, data, d, device):
         """
         Input:
             data: torch geometric batched data object
@@ -187,7 +187,7 @@ class SDE(torch.nn.Module):
         random_t = torch.rand(graph_num, device=self.Device) * (1. - eps) + eps  # (batch_size)
 
         # perturb
-        d = data.edge_length
+        # d = data.edge_length
         std = self.marginal_prob_std(random_t, sigma=25, device=self.Device)[edge2graph]  # num_edge, f(x)=\sigma^t
         z = self.noise_generator(data, self.noise_type)
         perturbed_d = d + z * std[:, None]
@@ -236,7 +236,7 @@ class SDE(torch.nn.Module):
         # loss = scatter_add(loss, edge2graph)  # (num_graph)
         return scores
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def judge(self, data, d, t):
         '''
         Args:
