@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_add
+from torch_scatter import scatter_add, scatter_mean
 from torch_sparse import coalesce
 from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_adj, dense_to_sparse
@@ -166,7 +166,7 @@ class SDE(torch.nn.Module):
         data.edge_length = d
         return data
 
-    def forward(self, data, d, device):
+    def forward(self, data):
         """
         Input:
             data: torch geometric batched data object
@@ -174,70 +174,96 @@ class SDE(torch.nn.Module):
             loss
         """
         # a workaround to get the current device, we assume all tensors in a model are on the same device.
-        self.Device = self.sigmas.device
-        data = self.extend_graph(data, self.order)  # 扩展图
-        data = self.get_distance(data)  # 计算距离
+        self.device = self.sigmas.device
+        data = self.extend_graph(data, self.order)
+        data = self.get_distance(data)
+
         assert data.edge_index.size(1) == data.edge_length.size(0)
         node2graph = data.batch
         edge2graph = node2graph[data.edge_index[0]]
 
-        # sample continuous noise level(different from the confgf)
-        graph_num = len(data.smiles)
-        eps = 1e-5
-        random_t = torch.rand(graph_num, device=self.Device) * (1. - eps) + eps  # (batch_size)
+        # sample noise level
+        noise_level = torch.randint(0, self.sigmas.size(0), (data.num_graphs,), device=self.device)  # (num_graph)
+
+        noise_level = torch.zeros_like(noise_level)
+        used_sigmas = self.sigmas[noise_level]  # (num_graph)
+        used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
 
         # perturb
-        # d = data.edge_length
-        std = self.marginal_prob_std(random_t, sigma=25, device=self.Device)[edge2graph]  # num_edge, f(x)=\sigma^t
-        z = self.noise_generator(data, self.noise_type)
-        perturbed_d = d + z * std[:, None]
+        d = data.edge_length  # (num_edge, 1)
+
+        if self.noise_type == 'symmetry':
+            num_nodes = scatter_add(torch.ones(data.num_nodes, dtype=torch.long, device=self.device),
+                                    node2graph)  # (num_graph)
+            num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
+            node_offset = num_cum_nodes - num_nodes  # (num_graph)
+            edge_offset = node_offset[edge2graph]  # (num_edge)
+
+            num_nodes_square = num_nodes ** 2  # (num_graph)
+            num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
+            edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
+            edge_start = edge_start[edge2graph]
+
+            all_len = num_nodes_square_cumsum[-1]
+
+            node_index = data.edge_index.t() - edge_offset.unsqueeze(-1)
+            # node_in, node_out = node_index.t()
+            node_large = node_index.max(dim=-1)[0]
+            node_small = node_index.min(dim=-1)[0]
+            undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
+
+            symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
+            d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
+
+        elif self.noise_type == 'rand':
+            d_noise = torch.randn_like(d)
+        else:
+            raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
+        assert d_noise.shape == d.shape
+        perturbed_d = d + d_noise * used_sigmas
+        # tmp = torch.nonzero(torch.abs(used_sigmas - 10) < 0.5)
+        # if tmp.numel() > 0:
+        #     print('有接近于10 的数字')
+        # perturbed_d = torch.clamp(perturbed_d, min=0.1, max=float('inf'))    # distances must be greater than 0
+
+        # get target, origin_d minus perturbed_d
+        target = -1 / (used_sigmas ** 2) * (perturbed_d - d)  # (num_edge, 1)
 
         # estimate scores
         node_attr = self.node_emb(data.atom_type)  # (num_node, hidden)
         edge_attr = self.edge_emb(data.edge_type)  # (num_edge, hidden)
-        d_emb = self.input_mlp(perturbed_d)  # (num_edge, hidden) 扰动后的数据做了一个MLP
+        d_emb = self.input_mlp(perturbed_d)  # (num_edge, hidden)
+        edge_attr = d_emb * edge_attr  # (num_edge, hidden)
 
-        if self.config.scheme.time_continuous:
-            # time embedding
-            t_embedding = self.t_embed(random_t)  # (batch_dim, hidden_dim) = (128, 256)
-            t_embedding = self.dense1(t_embedding)  # (batch_dim, 1) = (128,1)
-            # print(d_emb.shape, t_embedding[edge2graph].shape)
-            d_emb = d_emb + t_embedding[edge2graph]
-
-        edge_attr = d_emb * edge_attr  # (num_edge, hidden) 将边的长度嵌入和边的类型嵌入进行逐元素相乘，得到一个新的边的特征向量 todo:是否要改为其他的方式，
-        output = self.model(data, node_attr, edge_attr)  # {graph feature， node feature）送入GIN中
-
+        output = self.model(data, node_attr, edge_attr)
         h_row, h_col = output["node_feature"][data.edge_index[0]], output["node_feature"][
             data.edge_index[1]]  # (num_edge, hidden)
-        # h_row = torch.nn.functional.normalize(h_row)
-        # h_col = torch.nn.functional.normalize(h_col)
-        distance_feature = torch.cat([h_row * h_col, edge_attr], dim=-1)  # (num_edge, 2 * hidden)
-        scores = self.output_mlp(distance_feature)  # (batch_size, 1) # 为正例的概率
-        # for item in scores:
-        #     print(item.item(), end="   ")
-        # print(torch.isnan(scores))  # 输出 tensor([False, False, False, False, True])
-        # print(torch.isinf(scores))  # 输出 tensor([False, False, False, False, True])
 
-        # for num in scores:
-        #     if num is None:
-        #         print("error, null")
-            # print(num.item(), end=" ")
-        # scores = torch.softmax(scores, dim=1) # (num_edge, 2)
+        distance_feature = torch.cat([h_row * h_col, edge_attr], dim=-1)  # (num_edge, 2 * hidden)
+        scores = self.output_mlp(distance_feature)  # (num_edge, 1)
+        scores = scores * (1. / used_sigmas)  # f_theta_sigma(x) =  f_theta(x) / sigma, (num_edge, 1)
+
+        # target = target.view(-1)  # (num_edge)
+        # scores = scores.view(-1)  # (num_edge)
+        # loss = 0.5 * ((scores - target) ** 2) * (used_sigmas.squeeze(-1) ** self.anneal_power)  # (num_edge)
+        # loss = scatter_add(loss, edge2graph)  # (num_graph)
+        # return loss
         scores = scores.view(-1)
 
-        # scores = scores * (1. / self.marginal_prob_std(random_t[edge2graph],
-        #                                                sigma=25))  # f_theta_sigma(x) =  f_theta(x) / sigma, (num_edge, 1)
-        # labels = data.labels
         scores = scatter_add(scores, edge2graph)  # (num_graph)
-        # scores = self.sigmoid(scores)
-        # print(scores)
-        # loss = torch.nn.BCEWithLogitsLoss(scores, self.labels)
-        # loss = 0.5 * ((scores[:, ] * std[:, ] + z.squeeze(-1)) ** 2)  # (num_edge)
-        # loss = scatter_add(loss, edge2graph)  # (num_graph)
+
+
+        # 使用 torch.bincount 统计每个图的边数
+        edge_num_of_graphs = torch.bincount(edge2graph)
+        scores = scores / edge_num_of_graphs
+        # tmp = torch.nonzero(torch.abs(used_sigmas - 10) < 0.000001)
+        # if tmp.numel() > 0:
+        #     print('有接近于10 的数字')
+        #     # print(scores[tmp])
         return scores
 
     # @torch.no_grad()
-    def judge(self, data, d, t):
+    def judge(self, data, d, sigma):
         '''
         Args:
             data: the molecule_batched data, which provides edge_index and the information of other features
@@ -247,23 +273,87 @@ class SDE(torch.nn.Module):
         Returns:
             scores shape=(num_edges)
         '''
+        self.Device = self.sigmas.device
+        self.device = self.sigmas.device
+        # data = self.extend_graph(data, self.order)  # 扩展图
+        # data = self.get_distance(data)  # 计算距离
+        # assert data.edge_index.size(1) == data.edge_length.size(0)
+        #
+        # self.device = self.sigmas.device
+        # data = self.extend_graph(data, self.order)
+        # data = self.get_distance(data)
+
+        # assert data.edge_index.size(1) == data.edge_length.size(0)
         node2graph = data.batch
         edge2graph = node2graph[data.edge_index[0]]
-        node_attr = self.node_emb(data.atom_type)
-        edge_attr = self.edge_emb(data.edge_type)
-        d_emb = self.input_mlp(d)
 
-        t_embedding = self.t_embed(t)
-        t_embedding = self.dense1(t_embedding)
-        d_emb = d_emb + t_embedding[edge2graph]
+        # sample noise level
+        # noise_level = torch.randint(0, self.sigmas.size(0), (data.num_graphs,), device=self.device)  # (num_graph)
+        # used_sigmas = self.sigmas[noise_level]  # (num_graph)
+        # used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
+        used_sigmas = sigma
+        # perturb
+        # d = data.edge_length  # (num_edge, 1)
 
-        edge_attr = d_emb * edge_attr
+        if self.noise_type == 'symmetry':
+            num_nodes = scatter_add(torch.ones(data.num_nodes, dtype=torch.long, device=self.device),
+                                    node2graph)  # (num_graph)
+            num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
+            node_offset = num_cum_nodes - num_nodes  # (num_graph)
+            edge_offset = node_offset[edge2graph]  # (num_edge)
+
+            num_nodes_square = num_nodes ** 2  # (num_graph)
+            num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
+            edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
+            edge_start = edge_start[edge2graph]
+
+            all_len = num_nodes_square_cumsum[-1]
+
+            node_index = data.edge_index.t() - edge_offset.unsqueeze(-1)
+            # node_in, node_out = node_index.t()
+            node_large = node_index.max(dim=-1)[0]
+            node_small = node_index.min(dim=-1)[0]
+            undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
+
+            symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
+            d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
+
+        elif self.noise_type == 'rand':
+            d_noise = torch.randn_like(d)
+        else:
+            raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
+        assert d_noise.shape == d.shape
+        perturbed_d = d + d_noise * used_sigmas
+        # perturbed_d = torch.clamp(perturbed_d, min=0.1, max=float('inf'))    # distances must be greater than 0
+
+        # get target, origin_d minus perturbed_d
+        target = -1 / (used_sigmas ** 2) * (perturbed_d - d)  # (num_edge, 1)
+
+        # estimate scores
+        node_attr = self.node_emb(data.atom_type)  # (num_node, hidden)
+        edge_attr = self.edge_emb(data.edge_type)  # (num_edge, hidden)
+        d_emb = self.input_mlp(perturbed_d)  # (num_edge, hidden)
+        edge_attr = d_emb * edge_attr  # (num_edge, hidden)
+
         output = self.model(data, node_attr, edge_attr)
+        h_row, h_col = output["node_feature"][data.edge_index[0]], output["node_feature"][
+            data.edge_index[1]]  # (num_edge, hidden)
 
-        h_row, h_col = output["node_feature"][data.edge_index[0]], output["node_feature"][data.edge_index[1]]
-        distance_feature = torch.cat([h_row * h_col, edge_attr], dim=-1)
-        scores = self.output_mlp(distance_feature)
+        distance_feature = torch.cat([h_row * h_col, edge_attr], dim=-1)  # (num_edge, 2 * hidden)
+        scores = self.output_mlp(distance_feature)  # (num_edge, 1)
+        scores = scores * (1. / used_sigmas)  # f_theta_sigma(x) =  f_theta(x) / sigma, (num_edge, 1)
+
+        # target = target.view(-1)  # (num_edge)
+        # scores = scores.view(-1)  # (num_edge)
+        # loss = 0.5 * ((scores - target) ** 2) * (used_sigmas.squeeze(-1) ** self.anneal_power)  # (num_edge)
+        # loss = scatter_add(loss, edge2graph)  # (num_graph)
+        # return loss
         scores = scores.view(-1)
-        scores = torch.sigmoid(scores)
-        # scores = scores * (1. / self.marginal_prob_std(t[edge2graph], sigma=25))
+
+        scores = scatter_add(scores, edge2graph)  # (num_graph)
+
+
+        # 使用 torch.bincount 统计每个图的边数
+        edge_num_of_graphs = torch.bincount(edge2graph)
+        scores = scores / edge_num_of_graphs
         return scores

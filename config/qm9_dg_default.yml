@@ -1,12 +1,12 @@
 train:
   batch_size: 128
   seed: 2021
-  epochs: 10
+  epochs: 300
   shuffle: true
   resume_train: false
   eval: false
   true_dir: data/qm9_processed/val_data_5k.pkl
-  gen_dir: log/test/qm9_default/ConfGF_s0e200epoch284min_sig0.000.pkl
+  gen_dir: log/test/qm9_default/val_genConfGF_s0e5000epoch284min_sig0.000.pkl
   num_data: 200000
   num_workers: 0
   gpus:
@@ -38,8 +38,9 @@ train:
 test:
   init_checkpoint: checkpoints/discriminator/sde/qm9_dg_default2021
   output_path: log/dg/qm9
-  epoch: 9
-  gen_dir: log/test/qm9_default/ConfGF_s0e200epoch284min_sig0.000.pkl
+  epoch: 49
+  gen_dir: log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.060_seed2021.pkl
+  true_dir: data/qm9_processed/test_data_200.pkl
   gen:
     dg_step_size: 3.0
     dg_num_steps: 1000  

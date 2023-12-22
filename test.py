@@ -1,22 +1,16 @@
 import torch
 
-def fun(a, b):
-    c = a * b + b * 23
-    linear = torch.nn.Linear(10, 10)
-    b = linear(b)
-    c += b
-    return c, linear.weight
-a = torch.randn(1, 10)
-print(a)
-# a.requires_grad_()
-b = torch.randn(1, 10)
-print(b)
-b.requires_grad_()
-c, w  = fun(a, b)
-print(w)
-c.requires_grad_()
-grad= torch.autograd.grad(outputs=c.sum(), inputs=b, retain_graph=True)[0]
-print(grad)
-print(grad == (a + 23 + w))
+# 假设你有一个大小为 [4, 1] 的张量
+tensor_variable = torch.tensor([[9.8], [10.1], [8.9], [11.0], [10.2]])
+
+# 判断是否有接近于10的数字
+threshold = 0.5  # 设置阈值，表示接近于10的范围
+indices_near_10 = torch.nonzero(torch.abs(tensor_variable - 10) < threshold)
+
+# 打印结果
+if indices_near_10.numel() > 0:
+    print("张量中包含接近于10的数字，下标为:", indices_near_10)
+else:
+    print("张量中没有接近于10的数字")
 
 

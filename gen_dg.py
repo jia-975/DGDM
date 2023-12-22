@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--discriminator_config_path', type=str, help='path of discriminator config',
                         default="config/qm9_dg_default.yml")
     parser.add_argument('--generator', type=str, help='type of generator [ConfGF, ConfGFDist]', default="ConfGF")
-    parser.add_argument('--w_dg', type=float, help='weight of discriminator', default="0.5")
+    parser.add_argument('--w_dg', type=float, help='weight of discriminator', default="2.000")
     parser.add_argument('--device', type=str, default='cuda')
     # parser.add_argument('--score_config_path', type=str, help='path of score config', required=True)
     # parser.add_argument('--discriminator_config_path', type=str, help='path of discriminator config', required=True)

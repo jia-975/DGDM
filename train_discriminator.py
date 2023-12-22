@@ -36,9 +36,10 @@ def conformations_split(gen_data):
 
         # 按照num_node对pos_gen进行切分，得到一个长度为num_repeat的列表，每个元素是一个(num_node, 3)的张量
         pos_gen_list = torch.split(pos_gen, num_node, dim=0)
+        num = int(len(pos_gen_list) / 2)
 
         # 遍历pos_gen_list中的每个元素
-        for pos in pos_gen_list:
+        for pos in pos_gen_list[:num]:
             # 创建一个新的对象，复制原对象的所有属性，除了pos_gen
             new_obj = copy.copy(obj)
 
@@ -51,20 +52,25 @@ def conformations_split(gen_data):
     # 最后split_data列表中就有len(gen_data) * num_repeat个对象，每个对象的pos_gen属性是(num_node, 3)的张量
 
 
-def get_data(gen_dir, true_dir, num_data):
+def get_data(gen_dir, true_dir):
+    # num_data =
     # Prepare real data
     with open(true_dir, 'rb') as fin:
         real_data = pickle.load(fin)
+    # real_data = conformations_split(real_data)  # 将每个构象作为一个样本
+
     # Prepare fake data
     with open(gen_dir, 'rb') as fin:
         gen_data = pickle.load(fin)
-        print(len(gen_data))
-
-    ## Combine the fake / real
-    real_data = real_data[:num_data]
+        # print(len(gen_data))
     gen_data = conformations_split(gen_data)  # 将每个构象作为一个样本
 
-    gen_data = gen_data[:num_data]
+    # num_data = (len(gen_data) + len(real_data)) / 2
+    # print(num_data)
+    ## Combine the fake / real
+    real_data = real_data
+
+    gen_data = gen_data
     # 遍历 list2 中的每个对象, 删除多余属性，并对生成的多个构象进行处理（每个构象单独作为一个样本）
     for obj2 in gen_data:
         # 遍历 obj2 的属性
@@ -83,6 +89,7 @@ def get_data(gen_dir, true_dir, num_data):
     train_data = real_data + gen_data
     train_label = torch.zeros(len(train_data))
     train_label[:len(real_data)] = 1.  # 真实数据为1，生成数据为0
+    print("true_data = %d, gen_data = %d"%(len(real_data), len(gen_data)))
     return train_data, train_label
 
 
@@ -90,7 +97,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='confgf')
     # parser.add_argument('--config_path', type=str, help='path of dataset', default="bash_sde/qm9_ema_discriminator.yml")
-    parser.add_argument('--config_path', type=str, help='path of dataset', default="config/qm9_dg_default.yml")
+    parser.add_argument('--config_path', type=str, help='path of dataset', default="config/drugs_dg_default.yml")
     parser.add_argument('--seed', type=int, default=2021, help='overwrite config seed')
 
     args = parser.parse_args()
@@ -166,7 +173,7 @@ if __name__ == '__main__':
         gen_dir = config.train.gen_dir
         true_dir = config.train.true_dir
         num_data = config.train.num_data
-        train_data, train_label = get_data(gen_dir, true_dir, num_data)
+        train_data, train_label = get_data(gen_dir, true_dir)
         with open(load_path + '/discriminator_train_data.pkl', "wb") as f:
             pickle.dump(train_data, f)
         with open(load_path + '/discriminator_train_labels.pkl', "wb") as f:
@@ -180,25 +187,27 @@ if __name__ == '__main__':
     optimizer = utils.get_optimizer(config.train.optimizer, model)
     scheduler = utils.get_scheduler(config.train.scheduler, optimizer)
 
-    try:
-        # 尝试打开文件
-        with open(load_path + '/discriminator_test_data.pkl', 'rb') as f:
-            # 读取文件内容
-            test_data = pickle.load(f)
-            # 打印数据
-        with open(load_path + '/discriminator_test_labels.pkl', 'rb') as f:
-            # 读取文件内容
-            test_label = pickle.load(f)
-            # 打印数据
-    except FileNotFoundError:
-        test_data, test_label = get_data(gen_dir=config.test.gen_dir,
-                                         true_dir=load_path + '/test_data_200.pkl', num_data=200)
-        with open(load_path + '/discriminator_test_data.pkl', "wb") as f:
-            pickle.dump(test_data, f)
-        with open(load_path + '/discriminator_test_labels.pkl', "wb") as f:
-            pickle.dump(test_label, f)
-    # test_dataset = []
-    test_dataset = GEOMLabelDataset(data=test_data, label=test_label, transform=transform)
+    # try:
+    #     # 尝试打开文件
+    #     with open(load_path + '/discriminator_test_data.pkl', 'rb') as f:
+    #         # 读取文件内容
+    #         test_data = pickle.load(f)
+    #         # 打印数据
+    #     with open(load_path + '/discriminator_test_labels.pkl', 'rb') as f:
+    #         # 读取文件内容
+    #         test_label = pickle.load(f)
+    #         # 打印数据
+    # except FileNotFoundError:
+    #     test_data, test_label = get_data(gen_dir=config.test.gen_dir,
+    #                                      true_dir=config.test.true_dir)
+    #     with open(load_path + '/discriminator_test_data.pkl', "wb") as f:
+    #         pickle.dump(test_data, f)
+    #     with open(load_path + '/discriminator_test_labels.pkl', "wb") as f:
+    #         pickle.dump(test_label, f)
+
+
+    test_dataset = []
+    # test_dataset = GEOMLabelDataset(data=test_data, label=test_label, transform=transform)
 
     solver = runner.DefaultRunner(train_dataset, val_data, test_dataset, None, model, optimizer, scheduler, gpus,
                                 None, config)
@@ -207,7 +216,7 @@ if __name__ == '__main__':
     #     solver.load(config.train.resume_checkpoint, epoch=config.train.resume_epoch, load_optimizer=True,
     #                 load_scheduler=True)
     solver.train()
-    # disc_checkpoint = 'checkpoints/discriminator/sde/qm9_dg_default2021/checkpoint99'
+    # disc_checkpoint = 'checkpoints/discriminator/sde/qm9_dg_default2021/checkpoint49'
     # logger.log("Load discriminator checkpoint from %s" % disc_checkpoint)
     # state = torch.load(disc_checkpoint)
     #

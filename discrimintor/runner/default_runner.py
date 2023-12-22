@@ -1,6 +1,9 @@
 # coding: utf-8
+import math
 from re import L
 from time import time
+
+import numpy
 from sklearn import metrics
 # from d2l.torch import tensor
 from tqdm import tqdm
@@ -178,12 +181,12 @@ class DefaultRunner(object):
                 if self.device.type == "cuda":
                     batch = batch.to(self.device)
                     labels = labels.to(self.device)
-                tmp = batch.clone()
-                data = model.extend_graph(tmp, model.order)  # 扩展图
-                data = model.get_distance(data)  # 计算距离
-                d = data.edge_length
+                # tmp = batch.clone()
+                # data = model.extend_graph(tmp, model.order)  # 扩展图
+                # data = model.get_distance(data)  # 计算距离
+                # d = data.edge_length
                 # logger.log(batch, 'batch shape')
-                scores = model(data=batch, d=d, device=self.device)
+                scores = model(data=batch)
                 # for item in scores:
                 #     print(item.item())
                 # 处理labels
@@ -452,20 +455,37 @@ class DefaultRunner(object):
             if self.device.type == "cuda":
                 batch = batch.to(self.device)
                 labels = labels.to(self.device)
+            # tmp = batch.clone()
+            # data = model.extend_graph(tmp, model.order)  # 扩展图
+            # data = model.get_distance(data)  # 计算距离
+            # d = data.edge_length
+            out = model(batch)
 
-            out = model(batch, self.device)
-            out = torch.sigmoid(out)
-            for i in range(labels.shape[0]):
-                if out[i].item()!= labels[i].item():
-                    print(out[i].item(), labels[i].item())
-                else:
-                    print("--")
+
             loss = loss_function(out, labels)
             eval_losses.append(loss.item())
+            out = torch.sigmoid(out)
+            for item in out:
+                if 0.2 < item < 0.8:
+                    print(item, end='---')
+
             pred_label = [1 if prob >= 0.5 else 0 for prob in out]
+            # out_numpy = [sigmoid(item.item()) for item in out]
+            # out_numpy = sigmoid(out_numpy)
             # pred_label = pred_label.cpu().numpy()
             # labels = labels.cpu().numpy()
+            # for i in range(labels.shape[0]):
+            #     print(pred_label[i], labels[i].item())
+            #     # if pred_label[i] != labels[i].item():
+            #     #     print(pred_label[i], labels[i].item())
+            #     # else:
+            #     #     print("--")
+            # close_to_zero_count = np.sum(np.abs(pred_label) < 0.1)
+            # # 计算比例
+            # percentage_close_to_zero = close_to_zero_count / len(pred_label) * 100
+            # print(percentage_close_to_zero)
             labels = [t.cpu().numpy() for t in labels]
+
             accuracy.append(metrics.accuracy_score(pred_label, labels))
 
         average_loss = sum(eval_losses) / len(eval_losses)
@@ -505,4 +525,5 @@ class DefaultRunner(object):
         return all_data_list, all_traj
 
 
-
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
