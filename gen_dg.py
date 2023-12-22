@@ -7,14 +7,16 @@ from glob import glob
 from tqdm.auto import tqdm
 from easydict import EasyDict
 
-import discrimintor
+import discriminator
 from models.epsnet import *
 from utils.datasets import *
 from utils.datasets import PackedConformationDataset
 from utils.transforms import *
 from utils.misc import *
-from discrimintor import *
-from discrimintor import model, runner, utils
+from discriminator.epsnet import *
+import discriminator
+
+from discriminator import model, runner, utils
 
 
 def num_confs(num: str):
@@ -85,13 +87,9 @@ if __name__ == '__main__':
     logger = get_logger('test', output_dir)
     logger.info(args)
 
-    discriminator_model = discrimintor.model.SDE(disc_config)
     gpus = list(filter(lambda x: x is not None, disc_config.train.gpus))
-    solver = runner.DefaultRunner(None, None, None, None, discriminator_model, None,
-                                  None, gpus, disc_config)
 
     # dg_model = solver.load_dg(disc_config.test.init_checkpoint, disc_epoch=disc_config.test.epoch)
-    dg_model = solver.load_dg(disc_config.test.init_checkpoint, disc_epoch=disc_config.test.epoch)
     # Datasets and loaders
     logger.info('Loading datasets...')
     transforms = Compose([
@@ -107,8 +105,13 @@ if __name__ == '__main__':
     logger.info('Loading model...')
     model = get_model(ckpt['config'].model).to(args.device)
     model.load_state_dict(ckpt['model'])
-
-
+    # todo 判別器
+    discriminator_model = discriminator.get_model(args.disc_config_path.model).to(args.device)
+    model.load_state_dict(ckpt['dg_model'])
+    # discriminator_model = discriminator.model.SDE(disc_config)
+    # solver = runner.DefaultRunner(None, None, None, None, discriminator_model, None,
+    #                               None, gpus, disc_config)
+    # dg_model = solver.load_dg(disc_config.test.init_checkpoint, disc_epoch=disc_config.test.epoch)
 
     test_set_selected = []
     for i, data in enumerate(test_set):

@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch_sparse import SparseTensor, matmul
 from torch_geometric.nn.conv import MessagePassing
 
-from .common import MeanReadout, SumReadout, MultiLayerPerceptron
+from ..common import MeanReadout, SumReadout, MultiLayerPerceptron
 
 
 class GINEConv(MessagePassing):
@@ -62,38 +62,30 @@ class GINEConv(MessagePassing):
         return '{}(nn={})'.format(self.__class__.__name__, self.nn)        
 
 
-class GraphIsomorphismNetwork(torch.nn.Module):
+class GINEncoder(torch.nn.Module):
 
-    def __init__(self, hidden_dim, num_convs=3, activation="softplus", readout="sum", short_cut=False, concat_hidden=False):
-        super(GraphIsomorphismNetwork, self).__init__()
+    def __init__(self, hidden_dim, num_convs=3, activation='relu', short_cut=True, concat_hidden=False):
+        super().__init__()
 
         self.hidden_dim = hidden_dim
         self.num_convs = num_convs
         self.short_cut = short_cut
         self.concat_hidden = concat_hidden
+        self.node_emb = nn.Embedding(100, hidden_dim)
 
         if isinstance(activation, str):
             self.activation = getattr(F, activation)
         else:
             self.activation = None 
         
-
-
         self.convs = nn.ModuleList()
         for i in range(self.num_convs):
             self.convs.append(GINEConv(MultiLayerPerceptron(hidden_dim, [hidden_dim, hidden_dim], \
                                     activation=activation), activation=activation))
 
-        if readout == "sum":
-            self.readout = SumReadout()
-        elif readout == "mean":
-            self.readout = MeanReadout()
-        else:
-            raise ValueError("Unknown readout `%s`" % readout)
-
     
 
-    def forward(self, data, node_attr, edge_attr):
+    def forward(self, z, edge_index, edge_attr):
         """
         Input:
             data: (torch_geometric.data.Data): batched graph
@@ -103,17 +95,19 @@ class GraphIsomorphismNetwork(torch.nn.Module):
             node_attr
             graph feature
         """
+
+        node_attr = self.node_emb(z)    # (num_node, hidden)
  
         hiddens = []
         conv_input = node_attr # (num_node, hidden)
 
         for conv_idx, conv in enumerate(self.convs):
-            hidden = conv(conv_input, data.edge_index, edge_attr)
+            hidden = conv(conv_input, edge_index, edge_attr)
             if conv_idx < len(self.convs) - 1 and self.activation is not None:
                 hidden = self.activation(hidden)
             assert hidden.shape == conv_input.shape                
             if self.short_cut and hidden.shape == conv_input.shape:
-                hidden = conv_input + hidden
+                hidden += conv_input
 
             hiddens.append(hidden)
             conv_input = hidden
@@ -123,11 +117,4 @@ class GraphIsomorphismNetwork(torch.nn.Module):
         else:
             node_feature = hiddens[-1]
 
-        graph_feature = self.readout(data, node_feature)
-
-        return {
-            "graph_feature": graph_feature,
-            "node_feature": node_feature
-        }
-
-
+        return node_feature
