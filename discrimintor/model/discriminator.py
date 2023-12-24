@@ -356,4 +356,5 @@ class SDE(torch.nn.Module):
         # 使用 torch.bincount 统计每个图的边数
         edge_num_of_graphs = torch.bincount(edge2graph)
         scores = scores / edge_num_of_graphs
+        scores = self.sigmoid(scores)
         return scores

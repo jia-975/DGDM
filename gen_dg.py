@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--smiles', type=str, default=None, help='smiles for generation')
     parser.add_argument('--test_set', type=str, default=None)
     parser.add_argument('--seed', type=int, default=2021, help='overwrite config seed')
+    parser.add_argument('--tag', type=str, default="", help='overwrite config seed')
 
     args = parser.parse_args()
     with open(args.discriminator_config_path, 'r') as f:
@@ -142,4 +143,4 @@ if __name__ == '__main__':
     if args.start != -1 and args.end != -1:
         solver.dg_generate_samples_from_testset(args.start, args.end,
                                                 args.generator, num_repeat=args.num_repeat, dg_model=dg_model,w_dg=args.w_dg,
-                                                out_path=dg_config.test.output_path, seed=args.seed)
+                                                out_path=dg_config.test.output_path, seed=args.seed,tag=args.tag)

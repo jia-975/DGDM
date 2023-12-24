@@ -388,12 +388,12 @@ class DefaultRunner(object):
         return all_data_list
 
     def dg_generate_samples_from_testset(self, start, end, generator, num_repeat=None, out_path=None, dg_model=None,
-                                         w_dg=0.5, seed=2021):
+                                         w_dg=0.5, seed=2021, tag=""):
 
 
         # 指定文件夹路径
-        folder_path = os.path.join(out_path, 'new_%s_epoch%dmin_sig%.3f_dg_%.3f_seed%d' % (
-                    generator, self.config.test.epoch, self.config.test.gen.min_sigma, w_dg, seed,
+        folder_path = os.path.join(out_path, '%s%s_epoch%dmin_sig%.3f_dg_%.3f_seed%d' % (
+                    tag, generator, self.config.test.epoch, self.config.test.gen.min_sigma, w_dg, seed,
             ))
 
 
@@ -510,7 +510,7 @@ class DefaultRunner(object):
                 score_d = scorenet.get_score(data, d, sigma)  # (num_edge, 1)
                 # batch_time = torch.ones(d.shape[0], device=pos.device) * sigma
 
-                dg_score = get_ratio(dg_model, data, d, sigma)
+                dg_score = get_ratio(dg_model, data, d, sigma, i)
                 # print(dg_score)
 
                 score_d = score_d + w_dg * dg_score
@@ -525,7 +525,7 @@ class DefaultRunner(object):
         return data, pos_vecs
 
 
-def get_ratio(dg_model, data, d, batch_time):
+def get_ratio(dg_model, data, d, batch_time, i):
     with torch.enable_grad():
 
         x_ = d.float().clone().detach().requires_grad_(True)
@@ -534,6 +534,8 @@ def get_ratio(dg_model, data, d, batch_time):
         # print(min(dg_score), max(dg_score))
         dg_score.requires_grad_(True)
         dg_score = dg_score.unsqueeze(1)
+        if i < 5:
+            print(dg_score[:10])
         # print(type(dg_score))
         # print(input)
         # x_ = input.requires_grad_(True)
@@ -543,13 +545,13 @@ def get_ratio(dg_model, data, d, batch_time):
 
         dg = torch.autograd.grad(outputs=log_ratio.sum(), inputs=x_, retain_graph=False)[0]
         # print(dg_score[0], dg[0])
-        res = dg.cpu().clone().numpy()
-        close_to_zero_count = np.sum(np.abs(res) < 0.1)
+        # res = dg.cpu().clone().numpy()
+        # close_to_zero_count = np.sum(np.abs(res) < 0.1)
         # 计算比例
-        percentage_close_to_zero = close_to_zero_count / res.size * 100
-        if percentage_close_to_zero != 100.0:
-            print("c_phi输出：", end=" ")
-            print(percentage_close_to_zero, close_to_zero_count, res.size)
+        # percentage_close_to_zero = close_to_zero_count / res.size * 100
+        # if percentage_close_to_zero != 100.0:
+        #     print("c_phi输出：", end=" ")
+        #     print(percentage_close_to_zero, close_to_zero_count, res.size)
         # res = dg_score.cpu().detach().numpy()
         # close_to_zero_count = np.sum(np.abs(res) < 0.1)
         # 计算比例

@@ -44,7 +44,9 @@ test:
   init_checkpoint: checkpoints/discriminator/sde/drugs_dg_default2021
   output_path: log/dg/drugs
   file_name: drugs_distance_confs_1000
-  epoch: 49
+  gen_dir: log/test/drugs_default/val_genConfGF_s0e200epoch284min_sig0.000.pkl
+  true_dir: data/drugs_processed/test_data_200.pkl
+  epoch: 200
   gen:
     dg_step_size: 3.0
     dg_num_steps: 1000
