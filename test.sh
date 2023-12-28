@@ -11,37 +11,38 @@
 #python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 729
 #python get_task1_results.py --input log/dg/qm9/ConfGF_epoch284min_sig0.000_dg_0.050_seed729.pkl --threshold 0.5
 # todo:记得更改yml文件中的checkpoints
-python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 1.000 --seed 2021
-python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.040 --seed 2021
-python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.060 --seed 2021
-python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.080 --seed 2021
-python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 1.000 --seed 2021 --tag epoch200
-python get_task1_results.py --input log/dg/drugs/new_ConfGF_epoch284min_sig0.000_dg_1.000_seed2021/new_ConfGF_epoch284min_sig0.000_dg_1.000_seed2021.pkl --threshold 1.25
-#python -u gen_dg.py --config_path ./config/qm9_default.yml --generator ConfGF --start 0 --end 200
-python -u gen.py --config_path ./config/drugs_default.yml --generator ConfGF --test_set val_data_5k.pkl --start 0 --end 5000
-python -u gen.py --config_path ./config/drugs_default.yml --generator ConfGF  --start 0 --end 200
+#python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 1.000 --seed 2021
+#python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.040 --seed 2021
+#python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.060 --seed 2021
+#python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.080 --seed 2021
+#python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 2.000 --seed 2021 --tag test1 --start 0 --end 1
+python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 3.000 --seed 2021 --tag epoch200
+python get_task1_results.py --input log/dg/drugs/epoch200ConfGF_epoch284min_sig0.000_dg_3.000_seed2021/new_ConfGF_epoch284min_sig0.000_dg_3.000_seed2021.pkl --threshold 1.25
+python gen.py --config_path ./config/qm9_default.yml --generator ConfGF --smiles'CN1C(=O)CC=C1CO'
+#python -u gen.py --config_path ./config/drugs_default.yml --generator ConfGF --test_set val_data_5k.pkl --start 0 --end 5000
+#python -u gen.py --config_path ./config/drugs_default.yml --generator ConfGF  --start 0 --end 200
 #
 #python -u gen.py --config_path ./config/qm9_default.yml --generator ConfGF --smiles c1ccccc1 --start -1 --end -1
-python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 1.000 --seed 2021
+#python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 1.000 --seed 2021
 
 
-python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_2.000_seed2021.pkl --core 10 --threshold 0.5
-python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.040_seed2021.pkl --core 10 --threshold 0.5
-python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.060_seed2021.pkl --core 10 --threshold 0.5
-python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.080_seed2021.pkl --core 10 --threshold 0.5
-#python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 0.150 --seed 3407
-#python get_task1_results.py --input log/dg/drugs/ConfGF_epoch284min_sig0.000_dg_0.150_seed3407.pkl --threshold 1.25
-
-#python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 729
-#python get_task1_results.py --input log/dg/qm9/ConfGF_epoch284min_sig0.000_dg_0.050_seed729.pkl --threshold 0.5
+#python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_2.000_seed2021.pkl --core 10 --threshold 0.5
+#python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.040_seed2021.pkl --core 10 --threshold 0.5
+#python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.060_seed2021.pkl --core 10 --threshold 0.5
+#python -u get_task1_results.py --input  log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.080_seed2021.pkl --core 10 --threshold 0.5
+##python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 0.150 --seed 3407
+##python get_task1_results.py --input log/dg/drugs/ConfGF_epoch284min_sig0.000_dg_0.150_seed3407.pkl --threshold 1.25
+#
+##python gen_dg.py --score_config_path config/qm9_default.yml --discriminator_config_path config/qm9_dg_default.yml --w_dg 0.050 --seed 729
+##python get_task1_results.py --input log/dg/qm9/ConfGF_epoch284min_sig0.000_dg_0.050_seed729.pkl --threshold 0.5
+##
+##
+##
+##python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 0.150 --seed 729
+##python get_task1_results.py --input log/dg/drugs/ConfGF_epoch284min_sig0.000_dg_0.150_seed729.pkl --threshold 1.25
 #
 #
-#
-#python gen_dg.py --score_config_path config/drugs_default.yml --discriminator_config_path config/drugs_dg_default.yml --w_dg 0.150 --seed 729
-#python get_task1_results.py --input log/dg/drugs/ConfGF_epoch284min_sig0.000_dg_0.150_seed729.pkl --threshold 1.25
-
-
-python -u gen.py --config_path ./config/qm9_default.yml --generator ConfGF --start 0 --end 200
+#python -u gen.py --config_path ./config/qm9_default.yml --generator ConfGF --start 0 --end 200
 
 
 

@@ -1,6 +1,3 @@
-'''
-nohup python train.py --config_path ./bash_sde/drugs_ema.yml > sdegen_drugs.log 2>&1 &
-'''
 import argparse
 import copy
 
@@ -14,7 +11,7 @@ import torch
 from discrimintor import model, data, runner, utils
 from discrimintor.data import GEOMLabelDataset
 from discrimintor.utils import logger
-from sklearn.model_selection import StratifiedShuffleSplit
+from torch_geometric.transforms import Compose
 
 
 def conformations_split(gen_data):
@@ -22,7 +19,6 @@ def conformations_split(gen_data):
     # pos_gen是一个(num_repeat * num_node, 3)的张量，num_node是一个标量
     # 我们想把每个对象的pos_gen按照num_node切分成num_repeat个对象，每个对象的pos_gen是(num_node, 3)的张量
 
-    # 创建一个空列表，用来存储切分后的对象
     split_data = []
 
     # 遍历gen_data中的每个对象
@@ -53,24 +49,31 @@ def conformations_split(gen_data):
 
 
 def get_data(gen_dir, true_dir):
-    # num_data =
-    # Prepare real data
+    """
+    数据预处理
+    1. 处理true_dir中的数据：图扩充（3跳以内的邻居进行连线），从pos中计算边距离d，AddPlaceHolder(),utils.AddEdgeName()
+    2. 处理gen_dir中的数据：gen_data中的每个样本中含有多个构象，将其分离开来，并更新距离值。
+    """
+    # prepare ture data
     with open(true_dir, 'rb') as fin:
         real_data = pickle.load(fin)
-    # real_data = conformations_split(real_data)  # 将每个构象作为一个样本
+    transform = Compose([
+            utils.AddHigherOrderEdges(order=config.model.order),
+            utils.AddEdgeLength(),
+            utils.AddPlaceHolder(),
+            utils.AddEdgeName()
+        ])
+    for i in range(len(real_data)):
+        real_data[i] = transform(real_data[i])
 
-    # Prepare fake data
+    # prepare generative data
     with open(gen_dir, 'rb') as fin:
         gen_data = pickle.load(fin)
-        # print(len(gen_data))
     gen_data = conformations_split(gen_data)  # 将每个构象作为一个样本
+    t = utils.AddEdgeLength()   # 更新边距离
+    for i in range(len(gen_data)):
+        gen_data[i] = t(gen_data[i])
 
-    # num_data = (len(gen_data) + len(real_data)) / 2
-    # print(num_data)
-    ## Combine the fake / real
-    real_data = real_data
-
-    gen_data = gen_data
     # 遍历 list2 中的每个对象, 删除多余属性，并对生成的多个构象进行处理（每个构象单独作为一个样本）
     for obj2 in gen_data:
         # 遍历 obj2 的属性
@@ -97,7 +100,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='confgf')
     # parser.add_argument('--config_path', type=str, help='path of dataset', default="bash_sde/qm9_ema_discriminator.yml")
-    parser.add_argument('--config_path', type=str, help='path of dataset', default="config/drugs_dg_default.yml")
+    parser.add_argument('--config_path', type=str, help='path of dataset', default="config/qm9_dg_default.yml")
     parser.add_argument('--seed', type=int, default=2021, help='overwrite config seed')
 
     args = parser.parse_args()
@@ -141,9 +144,9 @@ if __name__ == '__main__':
     load_path = os.path.join(config.data.base_path, '%s_processed' % config.data.dataset)
     logger.log('loading data from %s' % load_path)
 
-    if config.scheme.framework == 'dsm':  # baseline
+    if config.scheme.framework == 'dsm':
         model = model.DistanceScoreMatch(config)
-    elif config.scheme.framework == 'sde':
+    elif config.scheme.framework == 'sde':   # this
         model = model.SDE(config)
     elif config.scheme.framework == 'time-continuous':
         model = model.ContinuousScoreMatch(config)
@@ -156,19 +159,12 @@ if __name__ == '__main__':
     val_data = []
     test_data = []
 
-    # 定义一个字典
-    # 将字典存储为pkl文件
 
     try:
-        # 尝试打开文件
         with open(load_path + '/discriminator_train_data.pkl', 'rb') as f:
-            # 读取文件内容
             train_data = pickle.load(f)
-            # 打印数据
         with open(load_path + '/discriminator_train_labels.pkl', 'rb') as f:
-            # 读取文件内容
             train_label = pickle.load(f)
-            # 打印数据
     except FileNotFoundError:
         gen_dir = config.train.gen_dir
         true_dir = config.train.true_dir
@@ -182,21 +178,16 @@ if __name__ == '__main__':
     train_dataset = GEOMLabelDataset(data=train_data, label=train_label, transform=transform)
 
     logger.log('train size : %d  ' % (len(train_data)))
-    logger.log('loading data done!')
+    logger.log('loading train data done!')
 
     optimizer = utils.get_optimizer(config.train.optimizer, model)
     scheduler = utils.get_scheduler(config.train.scheduler, optimizer)
 
     try:
-        # 尝试打开文件
         with open(load_path + '/discriminator_test_data.pkl', 'rb') as f:
-            # 读取文件内容
             test_data = pickle.load(f)
-            # 打印数据
         with open(load_path + '/discriminator_test_labels.pkl', 'rb') as f:
-            # 读取文件内容
             test_label = pickle.load(f)
-            # 打印数据
     except FileNotFoundError:
         test_data, test_label = get_data(gen_dir=config.test.gen_dir,
                                          true_dir=config.test.true_dir)
@@ -205,20 +196,18 @@ if __name__ == '__main__':
         with open(load_path + '/discriminator_test_labels.pkl', "wb") as f:
             pickle.dump(test_label, f)
 
-
     test_dataset = GEOMLabelDataset(data=test_data, label=test_label, transform=transform)
-    # test_dataset = []
+    logger.log('test size : %d  ' % (len(test_data)))
+    logger.log('loading test data done!')
 
-    solver = runner.DefaultRunner(train_dataset, val_data, test_dataset, None, model, optimizer, scheduler, gpus,
+    solver = runner.DefaultRunner(train_dataset, val_data, train_dataset, None, model, optimizer, scheduler, gpus,
                                 None, config)
-    # if config.train.resume_train:
+    solver.train()
 
-    #     solver.load(config.train.resume_checkpoint, epoch=config.train.resume_epoch, load_optimizer=True,
-    #                 load_scheduler=True)
-    # solver.train()
-    disc_checkpoint = 'checkpoints/discriminator/sde/drugs_dg_default2021/checkpoint200'
-    logger.log("Load discriminator checkpoint from %s" % disc_checkpoint)
-    state = torch.load(disc_checkpoint)
-
-    model.load_state_dict(state["model"])
-    solver.test(model)
+    # 测试时将下面的注释取消，并将solver.train()注释掉。
+    # disc_checkpoint = 'checkpoints/discriminator/sde/qm9_dg_default2021new/checkpoint289'
+    # logger.log("Load discriminator checkpoint from %s" % disc_checkpoint)
+    # state = torch.load(disc_checkpoint)
+    #
+    # model.load_state_dict(state["model"])
+    # solver.test(model)

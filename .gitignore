@@ -7,3 +7,4 @@ log/
 runs/
 build/
 __pycache__/
+.txt

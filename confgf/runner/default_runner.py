@@ -498,6 +498,7 @@ class DefaultRunner(object):
         pos_vecs = []
         pos = pos_init
         cnt_sigma = 0
+        res = []
         for i, sigma in tqdm(enumerate(sigmas), total=sigmas.size(0), desc="Sampling positions"):
             if sigma < min_sigma:
                 break
@@ -510,7 +511,7 @@ class DefaultRunner(object):
                 score_d = scorenet.get_score(data, d, sigma)  # (num_edge, 1)
                 # batch_time = torch.ones(d.shape[0], device=pos.device) * sigma
 
-                dg_score = get_ratio(dg_model, data, d, sigma, i)
+                dg_score = get_ratio(dg_model, data, d, sigma, res)
                 # print(dg_score)
 
                 score_d = score_d + w_dg * dg_score
@@ -521,21 +522,31 @@ class DefaultRunner(object):
                 pos_vecs.append(pos)
 
         pos_vecs = torch.stack(pos_vecs, dim=0).view(cnt_sigma, n_steps_each, -1, 3)  # (sigams, 100, num_node, 3)
+        for i in range(0,len(res)):
+            tensor_str = str(res[i])
 
+            # 写入或追加到文本文件
+            with open("log_dg_score.txt", 'a' if i > 0 else 'w') as file:
+                file.write(f'Iteration {i + 1}:\n')
+                file.write(tensor_str + '\n\n')
         return data, pos_vecs
 
 
-def get_ratio(dg_model, data, d, batch_time, i):
+def get_ratio(dg_model, data, d, batch_time, res):
     with torch.enable_grad():
 
         x_ = d.float().clone().detach().requires_grad_(True)
+        # print(x_)
+        # y = torch.randn(x_.size(),device=x_.device)
 
         dg_score = dg_model.judge(data, x_, batch_time).requires_grad_(True)
         # print(min(dg_score), max(dg_score))
         dg_score.requires_grad_(True)
         dg_score = dg_score.unsqueeze(1)
-        if i < 5:
-            print(dg_score[:10])
+        # res.append(dg_score)
+        # if i < 5:
+
+        # print(dg_score.T)
         # print(type(dg_score))
         # print(input)
         # x_ = input.requires_grad_(True)

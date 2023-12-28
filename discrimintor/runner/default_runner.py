@@ -2,8 +2,11 @@
 import math
 from re import L
 from time import time
-
+from torch_geometric.data import Data
+from torch_geometric.utils import to_dense_adj, dense_to_sparse
 import numpy
+from torch_scatter import scatter_add, scatter_mean
+from torch_sparse import coalesce
 from sklearn import metrics
 # from d2l.torch import tensor
 from tqdm import tqdm
@@ -25,7 +28,10 @@ from discrimintor import utils, feats
 from discrimintor.utils import logger
 from rdkit.Chem.rdForceFieldHelpers import MMFFOptimizeMolecule
 # from torch.utils.tensorboard import SummaryWriter
-
+import yaml
+from easydict import EasyDict
+import pickle
+from discrimintor import model, runner, utils
 
 class DefaultRunner(object):
     def __init__(self, train_set, val_set, test_set, score_model, discriminator_model, optimizer, scheduler, gpus,
@@ -144,7 +150,60 @@ class DefaultRunner(object):
         if verbose:
             logger.log('Evaluate %s Loss: %.5f | Time: %.5f' % (split, average_loss, time() - eval_start))
         return average_loss
+    @torch.no_grad()
+    def get_distance(self, data):
+        pos = data.pos
+        row, col = data.edge_index
+        d = (pos[row] - pos[col]).norm(dim=-1).unsqueeze(-1)  # (num_edge, 1)
+        data.edge_length = d
+        return data
 
+    @torch.no_grad()
+    # extend the edge on the fly, second order: angle, third order: dihedral
+    def extend_graph(self, data, order=3):
+
+        def binarize(x):
+            return torch.where(x > 0, torch.ones_like(x), torch.zeros_like(x))
+
+        def get_higher_order_adj_matrix(adj, order):
+            """
+            Args:
+                adj:        (N, N)
+                type_mat:   (N, N)
+            """
+            adj_mats = [torch.eye(adj.size(0), dtype=torch.long, device=adj.device), \
+                        binarize(adj + torch.eye(adj.size(0), dtype=torch.long, device=adj.device))]
+
+            for i in range(2, order + 1):
+                adj_mats.append(binarize(adj_mats[i - 1] @ adj_mats[1]))
+            order_mat = torch.zeros_like(adj)
+
+            for i in range(1, order + 1):
+                order_mat += (adj_mats[i] - adj_mats[i - 1]) * i
+
+            return order_mat
+
+        num_types = len(utils.BOND_TYPES)
+
+        N = data.num_nodes
+        adj = to_dense_adj(data.edge_index).squeeze(0)
+        adj_order = get_higher_order_adj_matrix(adj, order)  # (N, N)
+
+        type_mat = to_dense_adj(data.edge_index, edge_attr=data.edge_type).squeeze(0)  # (N, N)
+        type_highorder = torch.where(adj_order > 1, num_types + adj_order - 1, torch.zeros_like(adj_order))
+        assert (type_mat * type_highorder == 0).all()
+        type_new = type_mat + type_highorder
+
+        new_edge_index, new_edge_type = dense_to_sparse(type_new)
+        _, edge_order = dense_to_sparse(adj_order)
+
+        data.bond_edge_index = data.edge_index  # Save original edges
+        data.edge_index, data.edge_type = coalesce(new_edge_index, new_edge_type.long(), N, N)  # modify data
+        edge_index_1, data.edge_order = coalesce(new_edge_index, edge_order.long(), N, N)  # modify data
+        data.is_bond = (data.edge_type < num_types)
+        assert (data.edge_index == edge_index_1).all()
+
+        return data
     def train(self, verbose=1):
         # writer = SummaryWriter()
         train_start = time()
@@ -158,18 +217,15 @@ class DefaultRunner(object):
         model = self._disc_model
         loss_function = torch.nn.BCEWithLogitsLoss()
 
-        # if self.config.train.ema:
-        #     ema = utils.EMA(self.config.train.ema_decay)
-        #     for name, param in model.named_parameters():
-        #         if param.requires_grad:
-        #             ema.register(name, param.data)
 
         train_losses = []
         val_losses = []
         best_loss = self.best_loss
         start_epoch = self.start_epoch
         logger.log('start training...')
-
+        sigmas = torch.tensor(
+            np.exp(np.linspace(np.log(self.dg_config.model.sigma_begin), np.log(self.dg_config.model.sigma_end),
+                               self.dg_config.model.num_noise_level)), dtype=torch.float32, device=self.device)
         for epoch in range(num_epochs):
             # train
             model.train()
@@ -181,18 +237,54 @@ class DefaultRunner(object):
                 if self.device.type == "cuda":
                     batch = batch.to(self.device)
                     labels = labels.to(self.device)
-                # tmp = batch.clone()
-                # data = model.extend_graph(tmp, model.order)  # 扩展图
-                # data = model.get_distance(data)  # 计算距离
-                # d = data.edge_length
-                # logger.log(batch, 'batch shape')
-                scores = model(data=batch)
-                # for item in scores:
-                #     print(item.item())
-                # 处理labels
+
+
+                # batch = self.extend_graph(batch, self.dg_config.model.order)
+                # batch = self.get_distance(batch)
+                d = batch.edge_length  # (num_edge, 1)
+
+                node2graph = batch.batch
+                edge2graph = node2graph[batch.edge_index[0]]
+                if self.dg_config.model.noise_type == 'symmetry':
+                    num_nodes = scatter_add(torch.ones(batch.num_nodes, dtype=torch.long, device=self.device),
+                                            node2graph)  # (num_graph)
+                    num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
+                    node_offset = num_cum_nodes - num_nodes  # (num_graph)
+                    edge_offset = node_offset[edge2graph]  # (num_edge)
+
+                    num_nodes_square = num_nodes ** 2  # (num_graph)
+                    num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
+                    edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
+                    edge_start = edge_start[edge2graph]
+
+                    all_len = num_nodes_square_cumsum[-1]
+
+                    node_index = batch.edge_index.t() - edge_offset.unsqueeze(-1)
+                    # node_in, node_out = node_index.t()
+                    node_large = node_index.max(dim=-1)[0]
+                    node_small = node_index.min(dim=-1)[0]
+                    undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
+
+                    symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
+                    d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
+
+                elif self.dg_config.model.noise_type == 'rand':
+                    d_noise = torch.randn_like(d)
+                else:
+                    raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
+                assert d_noise.shape == d.shape
+
+                noise_level = torch.randint(0, sigmas.size(0), (batch.num_graphs,),
+                                            device=self.device)  # (num_graph)
+
+                used_sigmas = sigmas[noise_level]  # (num_graph)
+                used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
+                perturbed_d = d + d_noise * used_sigmas
+                scores = model(batch, perturbed_d, used_sigmas)
+                # print(scores.T, end="out\n")
+                # print(labels, end="label\n")
+
                 loss = loss_function(scores, labels)
-                # writer.add_scalar("Loss/train", loss, epoch)
-                # loss = loss.mean()
                 if not loss.requires_grad:
                     raise RuntimeError("loss doesn't require grad")
 
@@ -200,16 +292,11 @@ class DefaultRunner(object):
                 loss.backward()
                 self._optimizer.step()
 
-                # if self.config.train.ema:
-                #     for name, param in model.named_parameters():
-                #         if param.requires_grad:
-                #             ema.update(name, param.data)
 
                 batch_losses.append(loss.item())
 
                 if batch_cnt % self.dg_config.train.log_interval == 0 or (epoch == 0 and batch_cnt <= 10):
-                    # if batch_cnt % self.config.train.log_interval == 0:
-                    logger.log('Epoch: %d | Step: %d | loss: %.5f | Lr: %.7f' % \
+                    logger.log('Epoch: %d | Step: %d | loss: %.8f | Lr: %.7f' % \
                                (
                                    epoch + start_epoch, batch_cnt, batch_losses[-1],
                                    self._optimizer.param_groups[0]['lr']))
@@ -218,7 +305,7 @@ class DefaultRunner(object):
             train_losses.append(average_loss)
 
             if verbose:
-                logger.log('Epoch: %d | Train Loss: %.5f | Time: %.5f' % (
+                logger.log('Epoch: %d | Train Loss: %.8f | Time: %.5f' % (
                     epoch + start_epoch, average_loss, time() - epoch_start))
 
             # evaluate
@@ -235,28 +322,18 @@ class DefaultRunner(object):
             else:
                 self._scheduler.step()
 
-            # if val_losses[-1] < best_loss:
-            #     best_loss = val_losses[-1]
-            #     if self.config.train.save:
-            #         val_list = {
-            #             'cur_epoch': epoch + start_epoch,
-            #             'best_loss': best_loss,
-            #         }
-            #         self.save(self.config.train.save_path, epoch + start_epoch, val_list)
             if self.dg_config.train.save:
 
                 val_list = {
                     'cur_epoch': epoch + start_epoch,
                     'best_loss': best_loss,
                 }
-                self.save(self.dg_config.train.save_path + str(self.dg_config.train.seed), epoch + start_epoch, val_list)
+                self.save(self.dg_config.train.save_path + str(self.dg_config.train.seed) + "_lr0.0001", epoch + start_epoch, val_list)
 
         self.best_loss = best_loss
         self.start_epoch = start_epoch + num_epochs
         logger.log('optimization finished.')
         logger.log('Total time elapsed: %.5fs' % (time() - train_start))
-        # writer.close()
-        # tensorboard --logdir=runs
 
     def discriminator_sampeler(self, data, model):
         with torch.no_grad():
@@ -446,7 +523,9 @@ class DefaultRunner(object):
         dataloader = DataLoader(test_set, batch_size=self.dg_config.train.batch_size, \
                                 shuffle=True, num_workers=self.dg_config.train.num_workers)
         loss_function = torch.nn.BCEWithLogitsLoss()
-
+        sigmas = torch.tensor(
+            np.exp(np.linspace(np.log(self.dg_config.model.sigma_begin), np.log(self.dg_config.model.sigma_end),
+                               self.dg_config.model.num_noise_level)), dtype=torch.float32, device=self.device)
         model.eval()
         # code here
         eval_losses = []
@@ -455,19 +534,58 @@ class DefaultRunner(object):
             if self.device.type == "cuda":
                 batch = batch.to(self.device)
                 labels = labels.to(self.device)
-            # tmp = batch.clone()
-            # data = model.extend_graph(tmp, model.order)  # 扩展图
-            # data = model.get_distance(data)  # 计算距离
-            # d = data.edge_length
-            out = model(batch)
+            # batch = self.extend_graph(batch, self.dg_config.model.order)
+            # batch = self.get_distance(batch)
+            d = batch.edge_length  # (num_edge, 1)
+
+            node2graph = batch.batch
+            edge2graph = node2graph[batch.edge_index[0]]
+            if self.dg_config.model.noise_type == 'symmetry':
+                num_nodes = scatter_add(torch.ones(batch.num_nodes, dtype=torch.long, device=self.device),
+                                        node2graph)  # (num_graph)
+                num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
+                node_offset = num_cum_nodes - num_nodes  # (num_graph)
+                edge_offset = node_offset[edge2graph]  # (num_edge)
+
+                num_nodes_square = num_nodes ** 2  # (num_graph)
+                num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
+                edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
+                edge_start = edge_start[edge2graph]
+
+                all_len = num_nodes_square_cumsum[-1]
+
+                node_index = batch.edge_index.t() - edge_offset.unsqueeze(-1)
+                # node_in, node_out = node_index.t()
+                node_large = node_index.max(dim=-1)[0]
+                node_small = node_index.min(dim=-1)[0]
+                undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
+
+                symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
+                d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
+
+            elif self.dg_config.model.noise_type == 'rand':
+                d_noise = torch.randn_like(d)
+            else:
+                raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
+            assert d_noise.shape == d.shape
+
+            noise_level = torch.randint(0, sigmas.size(0), (batch.num_graphs,),
+                                        device=self.device)  # (num_graph)
+            # noise_level = torch.zeros(noise_level.size())
+
+            used_sigmas = sigmas[noise_level]  # (num_graph)
+            used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
+            perturbed_d = d + d_noise * used_sigmas
+            out = model(batch, perturbed_d, used_sigmas)
 
 
             loss = loss_function(out, labels)
             eval_losses.append(loss.item())
             out = torch.sigmoid(out)
-            for item in out:
-                if 0.2 < item < 0.8:
-                    print(item, end='---')
+            # for item in out:
+            #     print(item)
+                # if 0.2 < item < 0.8:
+                #     print(item, end='---')
 
             pred_label = [1 if prob >= 0.5 else 0 for prob in out]
             # out_numpy = [sigmoid(item.item()) for item in out]
@@ -475,11 +593,14 @@ class DefaultRunner(object):
             # pred_label = pred_label.cpu().numpy()
             # labels = labels.cpu().numpy()
             # for i in range(labels.shape[0]):
-            #     print(pred_label[i], labels[i].item())
-            #     # if pred_label[i] != labels[i].item():
-            #     #     print(pred_label[i], labels[i].item())
-            #     # else:
-            #     #     print("--")
+            #     # print(pred_label[i], labels[i].item())
+            #     # print(batch[i].smiles)
+            #     if pred_label[i] != labels[i].item():
+            #         print(pred_label[i], labels[i].item())
+            #         print(batch[i].smiles)
+
+                # else:
+                #     print("--")
             # close_to_zero_count = np.sum(np.abs(pred_label) < 0.1)
             # # 计算比例
             # percentage_close_to_zero = close_to_zero_count / len(pred_label) * 100
@@ -490,7 +611,7 @@ class DefaultRunner(object):
 
         average_loss = sum(eval_losses) / len(eval_losses)
         average_accuracy = sum(accuracy) / len(accuracy)
-        print('Average_loss = %.4f, average accuracy = %.4f' % (average_loss, average_accuracy))
+        print('Average_loss = %.8f, average accuracy = %.8f' % (average_loss, average_accuracy))
         return average_loss, average_accuracy
 
 
@@ -527,3 +648,4 @@ class DefaultRunner(object):
 
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
+

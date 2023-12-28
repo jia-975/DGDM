@@ -1,3 +1,27 @@
+### 训练判别器
+文件：train_discriminator.py
+
+数据：存放在data中，其中训练数据如下所示，处理完之后存储在data/qm9_processed文件夹下
+
+1. 真实数据：data/qm9_processed/val_data_5k.pkl 
+2. 生成数据：log/test/qm9_default/val_genConfGF_s0e5000epoch284min_sig0.000.pkl
+
+
+
+配置文件：config/qm9_dg_default.yml
+
+可以直接运行,也可以通过命令行
+```bash
+python train_discriminator.py --config_path config/qm9_dg_default.yml --seed 2021
+```
+
+### 测试判别器性能
+1. 测试准确率: train_discriminator.py中将train语句注释，打开test的注释。
+2. 测试单个分子：discrimintor/model/discriminator.py中直接运行。
+
+----------------------------
+
+
 ![ConfGF](assets/logo.png)
 
 ----------------------------

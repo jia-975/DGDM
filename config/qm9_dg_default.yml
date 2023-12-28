@@ -22,7 +22,7 @@ train:
   log_interval: 400
   optimizer:
     type: Adam
-    lr: 0.001
+    lr: 0.0001
     weight_decay: 0.000
     dropout: 0.0
   scheduler:
@@ -36,9 +36,9 @@ train:
 
 
 test:
-  init_checkpoint: checkpoints/discriminator/sde/qm9_dg_default2021
+  init_checkpoint: D:\pycharmProjects\DGDM\DGDM\checkpoints\discriminator\sde\qm9_dg_default2021new
   output_path: log/dg/qm9
-  epoch: 49
+  epoch: 286
   gen_dir: log/dg/qm9/new_ConfGF_epoch284min_sig0.000_dg_0.060_seed2021.pkl
   true_dir: data/qm9_processed/test_data_200.pkl
   gen:

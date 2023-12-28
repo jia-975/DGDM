@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 import torch
@@ -11,6 +13,9 @@ from torch_geometric.utils import to_dense_adj, dense_to_sparse
 from discrimintor import utils, layers
 from discrimintor.utils import GaussianFourierProjection
 
+import yaml
+from easydict import EasyDict
+import pickle
 
 class SDE(torch.nn.Module):
 
@@ -166,68 +171,11 @@ class SDE(torch.nn.Module):
         data.edge_length = d
         return data
 
-    def forward(self, data):
-        """
-        Input:
-            data: torch geometric batched data object
-        Output:
-            loss
-        """
-        # a workaround to get the current device, we assume all tensors in a model are on the same device.
+    def forward(self, data, perturbed_d, used_sigmas):
         self.device = self.sigmas.device
-        data = self.extend_graph(data, self.order)
-        data = self.get_distance(data)
 
-        assert data.edge_index.size(1) == data.edge_length.size(0)
         node2graph = data.batch
         edge2graph = node2graph[data.edge_index[0]]
-
-        # sample noise level
-        noise_level = torch.randint(0, self.sigmas.size(0), (data.num_graphs,), device=self.device)  # (num_graph)
-
-        noise_level = torch.zeros_like(noise_level)
-        used_sigmas = self.sigmas[noise_level]  # (num_graph)
-        used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
-
-        # perturb
-        d = data.edge_length  # (num_edge, 1)
-
-        if self.noise_type == 'symmetry':
-            num_nodes = scatter_add(torch.ones(data.num_nodes, dtype=torch.long, device=self.device),
-                                    node2graph)  # (num_graph)
-            num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
-            node_offset = num_cum_nodes - num_nodes  # (num_graph)
-            edge_offset = node_offset[edge2graph]  # (num_edge)
-
-            num_nodes_square = num_nodes ** 2  # (num_graph)
-            num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
-            edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
-            edge_start = edge_start[edge2graph]
-
-            all_len = num_nodes_square_cumsum[-1]
-
-            node_index = data.edge_index.t() - edge_offset.unsqueeze(-1)
-            # node_in, node_out = node_index.t()
-            node_large = node_index.max(dim=-1)[0]
-            node_small = node_index.min(dim=-1)[0]
-            undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
-
-            symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
-            d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
-
-        elif self.noise_type == 'rand':
-            d_noise = torch.randn_like(d)
-        else:
-            raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
-        assert d_noise.shape == d.shape
-        perturbed_d = d + d_noise * used_sigmas
-        # tmp = torch.nonzero(torch.abs(used_sigmas - 10) < 0.5)
-        # if tmp.numel() > 0:
-        #     print('有接近于10 的数字')
-        # perturbed_d = torch.clamp(perturbed_d, min=0.1, max=float('inf'))    # distances must be greater than 0
-
-        # get target, origin_d minus perturbed_d
-        target = -1 / (used_sigmas ** 2) * (perturbed_d - d)  # (num_edge, 1)
 
         # estimate scores
         node_attr = self.node_emb(data.atom_type)  # (num_node, hidden)
@@ -243,11 +191,6 @@ class SDE(torch.nn.Module):
         scores = self.output_mlp(distance_feature)  # (num_edge, 1)
         scores = scores * (1. / used_sigmas)  # f_theta_sigma(x) =  f_theta(x) / sigma, (num_edge, 1)
 
-        # target = target.view(-1)  # (num_edge)
-        # scores = scores.view(-1)  # (num_edge)
-        # loss = 0.5 * ((scores - target) ** 2) * (used_sigmas.squeeze(-1) ** self.anneal_power)  # (num_edge)
-        # loss = scatter_add(loss, edge2graph)  # (num_graph)
-        # return loss
         scores = scores.view(-1)
 
         scores = scatter_add(scores, edge2graph)  # (num_graph)
@@ -256,14 +199,11 @@ class SDE(torch.nn.Module):
         # 使用 torch.bincount 统计每个图的边数
         edge_num_of_graphs = torch.bincount(edge2graph)
         scores = scores / edge_num_of_graphs
-        # tmp = torch.nonzero(torch.abs(used_sigmas - 10) < 0.000001)
-        # if tmp.numel() > 0:
-        #     print('有接近于10 的数字')
-        #     # print(scores[tmp])
+        # scores = self.sigmoid(scores)
         return scores
 
     # @torch.no_grad()
-    def judge(self, data, d, sigma):
+    def judge(self, data, d, used_sigmas):
         '''
         Args:
             data: the molecule_batched data, which provides edge_index and the information of other features
@@ -275,59 +215,19 @@ class SDE(torch.nn.Module):
         '''
         self.Device = self.sigmas.device
         self.device = self.sigmas.device
-        # data = self.extend_graph(data, self.order)  # 扩展图
-        # data = self.get_distance(data)  # 计算距离
-        # assert data.edge_index.size(1) == data.edge_length.size(0)
-        #
-        # self.device = self.sigmas.device
-        # data = self.extend_graph(data, self.order)
-        # data = self.get_distance(data)
+        data = data.to(self.device)
 
-        # assert data.edge_index.size(1) == data.edge_length.size(0)
         node2graph = data.batch
         edge2graph = node2graph[data.edge_index[0]]
 
-        # sample noise level
         # noise_level = torch.randint(0, self.sigmas.size(0), (data.num_graphs,), device=self.device)  # (num_graph)
+
+        # # noise_level = torch.zeros_like(noise_level)
         # used_sigmas = self.sigmas[noise_level]  # (num_graph)
         # used_sigmas = used_sigmas[edge2graph].unsqueeze(-1)  # (num_edge, 1)
-        used_sigmas = sigma
-        # perturb
-        # d = data.edge_length  # (num_edge, 1)
 
-        if self.noise_type == 'symmetry':
-            num_nodes = scatter_add(torch.ones(data.num_nodes, dtype=torch.long, device=self.device),
-                                    node2graph)  # (num_graph)
-            num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
-            node_offset = num_cum_nodes - num_nodes  # (num_graph)
-            edge_offset = node_offset[edge2graph]  # (num_edge)
+        perturbed_d = d
 
-            num_nodes_square = num_nodes ** 2  # (num_graph)
-            num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
-            edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
-            edge_start = edge_start[edge2graph]
-
-            all_len = num_nodes_square_cumsum[-1]
-
-            node_index = data.edge_index.t() - edge_offset.unsqueeze(-1)
-            # node_in, node_out = node_index.t()
-            node_large = node_index.max(dim=-1)[0]
-            node_small = node_index.min(dim=-1)[0]
-            undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
-
-            symm_noise = torch.zeros(all_len, device=self.device, dtype=torch.float).normal_()
-            d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
-
-        elif self.noise_type == 'rand':
-            d_noise = torch.randn_like(d)
-        else:
-            raise NotImplementedError('noise type must in [distance_symm, distance_rand]')
-        assert d_noise.shape == d.shape
-        perturbed_d = d + d_noise * used_sigmas
-        # perturbed_d = torch.clamp(perturbed_d, min=0.1, max=float('inf'))    # distances must be greater than 0
-
-        # get target, origin_d minus perturbed_d
-        target = -1 / (used_sigmas ** 2) * (perturbed_d - d)  # (num_edge, 1)
 
         # estimate scores
         node_attr = self.node_emb(data.atom_type)  # (num_node, hidden)
@@ -343,11 +243,6 @@ class SDE(torch.nn.Module):
         scores = self.output_mlp(distance_feature)  # (num_edge, 1)
         scores = scores * (1. / used_sigmas)  # f_theta_sigma(x) =  f_theta(x) / sigma, (num_edge, 1)
 
-        # target = target.view(-1)  # (num_edge)
-        # scores = scores.view(-1)  # (num_edge)
-        # loss = 0.5 * ((scores - target) ** 2) * (used_sigmas.squeeze(-1) ** self.anneal_power)  # (num_edge)
-        # loss = scatter_add(loss, edge2graph)  # (num_graph)
-        # return loss
         scores = scores.view(-1)
 
         scores = scatter_add(scores, edge2graph)  # (num_graph)
@@ -358,3 +253,73 @@ class SDE(torch.nn.Module):
         scores = scores / edge_num_of_graphs
         scores = self.sigmoid(scores)
         return scores
+
+def load_dg(model, disc_checkpoint, disc_epoch=None, device="cpu", load_optimizer=False,
+         load_scheduler=False):
+
+    disc_epoch = str(disc_epoch) if disc_epoch is not None else ''
+    # load discriminator
+    disc_checkpoint = os.path.join(disc_checkpoint, 'checkpoint%s' % disc_epoch)
+    # logger.log("Load discriminator checkpoint from %s" % disc_checkpoint)
+    state = torch.load(disc_checkpoint, map_location=device)
+    model.load_state_dict(state["model"])
+    # self._model.load_state_dict(state["model"], strict=False)
+    return model
+if __name__ == "__main__":
+    with open("D:\pycharmProjects\DGDM\DGDM\config\qm9_dg_default.yml", 'r') as f:
+        dg_config = yaml.safe_load(f)
+    dg_config = EasyDict(dg_config)
+    model = SDE(dg_config)
+    gpus = list(filter(lambda x: x is not None, dg_config.train.gpus))
+    device = torch.device(gpus[0]) if len(gpus) > 0 else torch.device('cpu')
+    dg_model = load_dg(model, dg_config.test.init_checkpoint, dg_config.test.epoch, device)
+    dg_model.to(device)
+    with open(r"D:\pycharmProjects\DGDM\DGDM\data\qm9_processed\discriminator_train_data.pkl", 'rb') as file:
+        # 使用pickle.load()加载数据
+        data = pickle.load(file)
+    batch = data[0].to(device)
+    num_repeat_ = 1
+    batch = utils.repeat_data(batch, num_repeat_)
+
+    d = batch.edge_length
+
+
+    node2graph = batch.batch
+    edge2graph = node2graph[batch.edge_index[0]]
+
+    num_nodes = scatter_add(torch.ones(batch.num_nodes, dtype=torch.long, device=device),
+                            node2graph)  # (num_graph)
+    num_cum_nodes = num_nodes.cumsum(0)  # (num_graph)
+    node_offset = num_cum_nodes - num_nodes  # (num_graph)
+    edge_offset = node_offset[edge2graph]  # (num_edge)
+
+    num_nodes_square = num_nodes ** 2  # (num_graph)
+    num_nodes_square_cumsum = num_nodes_square.cumsum(-1)  # (num_graph)
+    edge_start = num_nodes_square_cumsum - num_nodes_square  # (num_graph)
+    edge_start = edge_start[edge2graph]
+
+    all_len = num_nodes_square_cumsum[-1]
+
+    node_index = batch.edge_index.t() - edge_offset.unsqueeze(-1)
+    # node_in, node_out = node_index.t()
+    node_large = node_index.max(dim=-1)[0]
+    node_small = node_index.min(dim=-1)[0]
+    undirected_edge_id = node_large * (node_large + 1) + node_small + edge_start
+
+    symm_noise = torch.zeros(all_len, device=device, dtype=torch.float).normal_()
+    d_noise = symm_noise[undirected_edge_id].unsqueeze(-1)  # (num_edge, 1)
+    assert d_noise.shape == d.shape
+    # d = torch.rand(d.size())
+    # print(d.T)
+
+    sigmas = torch.tensor(
+        np.exp(np.linspace(np.log(0.01), np.log(10),
+                           50)), dtype=torch.float32, device=device)
+
+    for i in range(len(sigmas)):
+        sigma = sigmas[i]
+        perturbed_d = d + d_noise * sigma
+        res = dg_model.judge(batch, perturbed_d, sigma)
+        print(sigma, res)
+
+    pass
